@@ -384,6 +384,11 @@ func (s *Service) Finalize(ctx context.Context, id domain.TaskID, op domain.Oper
 			if !won {
 				return domain.Envelope{}, domain.NewError(domain.CodeTerminalState, "concurrent finalize lost")
 			}
+			// A cancel must free the rack shelf, light window, acclimation
+			// window, and detection wells the task held; otherwise the
+			// cancelled task keeps active leases and a later task reusing the
+			// same resources fails at the acquire step even though it locked.
+			s.releaseLeases(ctx, id)
 			return domain.OKEnvelope(map[string]any{"state": domain.StateCancelled.String()}), nil
 		default:
 			return domain.Envelope{}, domain.NewError(domain.CodeInvalidInput, "unknown finalize action")
