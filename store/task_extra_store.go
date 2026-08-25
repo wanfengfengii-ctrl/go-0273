@@ -91,13 +91,17 @@ func (db *DB) FinalDecision(ctx context.Context, id domain.TaskID) (task.FinalDe
 
 // SetFinal atomically writes the terminal state and final type using a
 // conditional state_version update, forming the single-writer barrier: only one
-// of several concurrent finalize requests can win.
+// of several concurrent finalize requests can win. The final_type='' guard
+// additionally ensures a committed terminal decision cannot be overwritten by a
+// later finalize arriving while the task still sits in a non-terminal phase
+// (notably acclimate, which lands in the non-terminal acclimatable state and
+// has already issued its permit).
 func (db *DB) SetFinal(ctx context.Context, id domain.TaskID, from domain.TaskState, to domain.TaskState, final domain.FinalType) (bool, error) {
 	var won bool
 	err := db.Tx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
 			`UPDATE tasks SET state=?, final_type=?, state_version=state_version+1, updated_at=updated_at+1
-			 WHERE id=? AND state=?`,
+			 WHERE id=? AND state=? AND final_type = ''`,
 			int(to), string(final), string(id), int(from))
 		if err != nil {
 			return err
