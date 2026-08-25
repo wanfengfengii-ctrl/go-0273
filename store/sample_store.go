@@ -149,13 +149,15 @@ func (db *DB) AcquireLease(ctx context.Context, l sample.ResourceLease) error {
 	return err
 }
 
-// ReplaceLease deactivates any active lease on the key and inserts a new one
-// with the incremented version, all within the caller's transaction.
-func (db *DB) ReplaceLease(ctx context.Context, l sample.ResourceLease) error {
+// ReplaceLease deactivates the active lease on oldKey and inserts a new one
+// with the incremented version under the lease's own resource key, all within
+// a single transaction. For a switch, oldKey is the resource being released and
+// l.ResourceKey is its replacement; for a renewal, the two are equal.
+func (db *DB) ReplaceLease(ctx context.Context, oldKey string, l sample.ResourceLease) error {
 	return db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE resource_leases SET active=0 WHERE resource_type=? AND resource_key=? AND active=1`,
-			string(l.ResourceType), l.ResourceKey); err != nil {
+			string(l.ResourceType), oldKey); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx,

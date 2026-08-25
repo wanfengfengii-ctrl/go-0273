@@ -19,7 +19,7 @@ type Store interface {
 	BlindCode(ctx context.Context, digest string) (BlindCode, error)
 	Reveal(ctx context.Context, digest string, ev RevealEvent) error
 	AcquireLease(ctx context.Context, l ResourceLease) error
-	ReplaceLease(ctx context.Context, l ResourceLease) error
+	ReplaceLease(ctx context.Context, oldKey string, l ResourceLease) error
 	ReleaseLease(ctx context.Context, resourceType ResourceType, key string) error
 	ActiveLease(ctx context.Context, resourceType ResourceType, key string) (ResourceLease, error)
 	ActiveLeasesByTask(ctx context.Context, id domain.TaskID) ([]ResourceLease, error)
@@ -193,7 +193,7 @@ func (s *Service) SwitchResource(ctx context.Context, id domain.TaskID, op domai
 		newLease.ResourceKey = req.NewKey
 		newLease.Version = cur.Version + 1
 		newLease.StartAt = s.clock.Now()
-		if err := s.store.ReplaceLease(ctx, newLease); err != nil {
+		if err := s.store.ReplaceLease(ctx, req.OldKey, newLease); err != nil {
 			return domain.Envelope{}, err
 		}
 		return domain.OKEnvelope(map[string]any{"version": newLease.Version}), nil
@@ -227,7 +227,7 @@ func (s *Service) RenewResource(ctx context.Context, id domain.TaskID, op domain
 		}
 		cur.EndAt += req.Extension
 		cur.Version++
-		if err := s.store.ReplaceLease(ctx, cur); err != nil {
+		if err := s.store.ReplaceLease(ctx, req.ResourceKey, cur); err != nil {
 			return domain.Envelope{}, err
 		}
 		return domain.OKEnvelope(map[string]any{"version": cur.Version}), nil
