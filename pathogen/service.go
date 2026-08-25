@@ -72,8 +72,11 @@ func (s *Service) RunDeviceCall(ctx context.Context, id domain.TaskID, op domain
 		if err != nil {
 			return domain.Envelope{}, err
 		}
-		if t.State.IsTerminal() {
-			return domain.Envelope{}, domain.NewError(domain.CodeTerminalState, "task is terminal")
+		// Once the acclimation permit is issued the evidence chain is frozen; a
+		// late device read must not append a new Ct version that would drift
+		// from the permit's evidence digest.
+		if t.State.IsFinal() {
+			return domain.Envelope{}, domain.NewError(domain.CodeTerminalState, "task is final")
 		}
 		if t.Generation != req.Generation {
 			return domain.Envelope{}, domain.NewError(domain.CodeInvalidInput, "stale generation")
@@ -113,8 +116,10 @@ func (s *Service) RetryDeviceCall(ctx context.Context, id domain.TaskID, op doma
 		if err != nil {
 			return domain.Envelope{}, err
 		}
-		if t.State.IsTerminal() {
-			return domain.Envelope{}, domain.NewError(domain.CodeTerminalState, "task is terminal")
+		// The permit closes the version barrier; a retried late device read
+		// must not append an evidence version after issuance.
+		if t.State.IsFinal() {
+			return domain.Envelope{}, domain.NewError(domain.CodeTerminalState, "task is final")
 		}
 		if call.Status == CallSucceeded || call.Status == CallPermanentFail {
 			return domain.Envelope{}, domain.NewError(domain.CodeInvalidInput, "call already resolved")
@@ -229,8 +234,10 @@ func (s *Service) AppendRecheckEvidence(ctx context.Context, id domain.TaskID, o
 		if err != nil {
 			return domain.Envelope{}, err
 		}
-		if t.State.IsTerminal() {
-			return domain.Envelope{}, domain.NewError(domain.CodeTerminalState, "task is terminal")
+		// Evidence submitted under a recheck round is frozen once the permit is
+		// issued, so the chain cannot diverge from the digest.
+		if t.State.IsFinal() {
+			return domain.Envelope{}, domain.NewError(domain.CodeTerminalState, "task is final")
 		}
 		if t.Generation != req.Generation {
 			return domain.Envelope{}, domain.NewError(domain.CodeInvalidInput, "stale generation")

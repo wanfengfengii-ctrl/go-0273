@@ -68,6 +68,15 @@ func (s TaskState) IsTerminal() bool {
 	return s == StateAcclimated || s == StateIsolated || s == StateCancelled
 }
 
+// IsFinal reports whether the version barrier has closed: the acclimation
+// permit has been issued (StateAcclimatable) or the task has reached a terminal
+// state. Once final, the evidence chain is frozen so the permit's
+// EvidenceDigest can never drift from the evidence returned later; any device
+// read or recheck evidence submitted afterward is rejected as terminal.
+func (s TaskState) IsFinal() bool {
+	return s >= StateAcclimatable
+}
+
 // FinalType is the single-writer terminal outcome of a task.
 type FinalType string
 
