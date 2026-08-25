@@ -18,8 +18,9 @@ import (
 )
 
 // newTestServer builds a fully wired server backed by an in-memory SQLite DB
-// and seeds a minimal but complete catalog for the happy-path flow.
-func newTestServer(t *testing.T) *Server {
+// and seeds a minimal but complete catalog for the happy-path flow. The shared
+// logical clock is returned so callers can advance deterministic time.
+func newTestServer(t *testing.T) (*Server, *domain.LogicalClock) {
 	t.Helper()
 	db, err := store.Open(":memory:")
 	if err != nil {
@@ -35,7 +36,7 @@ func newTestServer(t *testing.T) *Server {
 	pathogenSvc := pathogen.NewService(db, clock)
 
 	seedCatalog(t, catalogSvc)
-	return NewServer(catalogSvc, taskSvc, sampleSvc, measureSvc, pathogenSvc, func() bool { return true })
+	return NewServer(catalogSvc, taskSvc, sampleSvc, measureSvc, pathogenSvc, func() bool { return true }), clock
 }
 
 func seedCatalog(t *testing.T, c *catalog.Service) {
@@ -92,7 +93,7 @@ func createAndLock(t *testing.T, srv *Server) string {
 }
 
 func TestFullAcclimationFlow(t *testing.T) {
-	srv := newTestServer(t)
+	srv, clock := newTestServer(t)
 	id := createAndLock(t, srv)
 
 	// Two distinct subculture confirmations.
@@ -133,10 +134,10 @@ func TestFullAcclimationFlow(t *testing.T) {
 	}
 
 	// Pathogen evidence via device calls with deterministic retry.
-	runDeviceSuccess(t, srv, id, "call-w1", "BC1", "virus", "W1", "20.0", 1)
-	runDeviceSuccess(t, srv, id, "call-w2", "BC2", "virus", "W2", "22.0", 1)
-	runDeviceSuccess(t, srv, id, "call-ew1", "BC1", "endophyte", "EW1", "100", 0)
-	runDeviceSuccess(t, srv, id, "call-ew2", "BC2", "endophyte", "EW2", "120", 0)
+	runDeviceSuccess(t, srv, clock, id, "call-w1", "BC1", "virus", "W1", "20.0", 1)
+	runDeviceSuccess(t, srv, clock, id, "call-w2", "BC2", "virus", "W2", "22.0", 1)
+	runDeviceSuccess(t, srv, clock, id, "call-ew1", "BC1", "endophyte", "EW1", "100", 0)
+	runDeviceSuccess(t, srv, clock, id, "call-ew2", "BC2", "endophyte", "EW2", "120", 0)
 
 	// Advance to independent review.
 	code, env = doJSON(t, srv, "POST", "/api/v1/tasks/"+id+"/advance-review", "op-adv", map[string]any{})
@@ -174,8 +175,10 @@ func TestFullAcclimationFlow(t *testing.T) {
 }
 
 // runDeviceSuccess drives one device call to a successful evidence append by
-// retrying through the deterministic fault script.
-func runDeviceSuccess(t *testing.T, srv *Server, id, callID, blindCode, detType, well, value string, scale int) {
+// retrying through the deterministic fault script. Each retry must wait for
+// the logical clock to reach the scheduled next retry time, so the helper
+// advances the clock to next_retry_at before every attempt.
+func runDeviceSuccess(t *testing.T, srv *Server, clock *domain.LogicalClock, id, callID, blindCode, detType, well, value string, scale int) {
 	t.Helper()
 	req := map[string]any{
 		"task_generation": 1, "call_id": callID, "device_type": "rt_qpcr", "target": well,
@@ -185,8 +188,11 @@ func runDeviceSuccess(t *testing.T, srv *Server, id, callID, blindCode, detType,
 	if code != http.StatusOK || env.Code != domain.CodeOK {
 		t.Fatalf("device call %s failed: %d %+v", callID, code, env)
 	}
-	// Retry until succeeded (fault steps 0..3 fail, step 4 succeeds).
+	// Retry until succeeded (fault steps 0..3 fail, step 4 succeeds). A retry is
+	// rejected with RETRY_NOT_DUE until the clock reaches next_retry_at, so
+	// advance deterministic time to the scheduled moment before each attempt.
 	for i := 0; i < 5; i++ {
+		clock.Set(nextRetryAt(env))
 		code, env = doJSON(t, srv, "POST", "/api/v1/device-calls/"+callID+"/retry", "op-retry-"+callID+"-"+string(rune('a'+i)),
 			map[string]any{"task_id": id})
 		if code != http.StatusOK || env.Code != domain.CodeOK {
@@ -197,6 +203,25 @@ func runDeviceSuccess(t *testing.T, srv *Server, id, callID, blindCode, detType,
 		}
 	}
 	t.Fatalf("device call %s never succeeded", callID)
+}
+
+// nextRetryAt extracts the scheduled next retry time from a device-call
+// response envelope. The pathogen-calls and retry endpoints both return
+// next_retry_at in their data payload.
+func nextRetryAt(env domain.Envelope) domain.LogicalTime {
+	d, ok := env.Data.(map[string]any)
+	if !ok {
+		return 0
+	}
+	v, _ := d["next_retry_at"]
+	switch n := v.(type) {
+	case float64:
+		return domain.LogicalTime(int64(n))
+	case int64:
+		return domain.LogicalTime(n)
+	default:
+		return 0
+	}
 }
 
 func sampleSealReq() map[string]any {

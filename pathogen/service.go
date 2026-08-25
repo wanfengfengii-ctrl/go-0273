@@ -99,7 +99,9 @@ func (s *Service) RunDeviceCall(ctx context.Context, id domain.TaskID, op domain
 }
 
 // RetryDeviceCall advances a pending or failed device call one deterministic
-// step. Failures never produce evidence or release leases.
+// step. A retry is rejected with RETRY_NOT_DUE until the logical clock reaches
+// the call's scheduled next retry time. Failures never produce evidence or
+// release leases.
 func (s *Service) RetryDeviceCall(ctx context.Context, id domain.TaskID, op domain.OperationID, digest string, callID string) ([]byte, domain.ErrorCode, error) {
 	return task.RunIdempotent(ctx, s.store, id, op, digest, func() (domain.Envelope, error) {
 		call, err := s.store.DeviceCall(ctx, callID)
@@ -118,6 +120,12 @@ func (s *Service) RetryDeviceCall(ctx context.Context, id domain.TaskID, op doma
 		}
 		if call.Status == CallSucceeded || call.Status == CallPermanentFail {
 			return domain.Envelope{}, domain.NewError(domain.CodeInvalidInput, "call already resolved")
+		}
+		// A scheduled retry may only run once the logical clock has reached the
+		// next retry time. Without this gate a caller could fire retries back to
+		// back and run the fault script ahead of its deterministic schedule.
+		if call.NextRetryAt > 0 && s.clock.Now() < call.NextRetryAt {
+			return domain.Envelope{}, domain.NewError(domain.CodeRetryNotDue, "retry not yet due")
 		}
 		if err := s.execute(ctx, t, &call); err != nil {
 			return domain.Envelope{}, err

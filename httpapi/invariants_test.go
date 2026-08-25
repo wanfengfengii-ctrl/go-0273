@@ -12,7 +12,7 @@ import (
 // operation with the same content replays the original result, and the same
 // operation with different content returns OPERATION_CONTENT_CONFLICT.
 func TestIdempotentReplayAndConflict(t *testing.T) {
-	srv := newTestServer(t)
+	srv, _ := newTestServer(t)
 	id := createAndLock(t, srv)
 
 	code, env := doJSON(t, srv, "POST", "/api/v1/tasks/"+id+"/subculture-confirmations", "op-sc",
@@ -38,7 +38,7 @@ func TestIdempotentReplayAndConflict(t *testing.T) {
 
 // TestRoleOverlapRejected verifies a person cannot confirm twice.
 func TestRoleOverlapRejected(t *testing.T) {
-	srv := newTestServer(t)
+	srv, _ := newTestServer(t)
 	id := createAndLock(t, srv)
 
 	doJSON(t, srv, "POST", "/api/v1/tasks/"+id+"/subculture-confirmations", "op-1",
@@ -52,7 +52,7 @@ func TestRoleOverlapRejected(t *testing.T) {
 
 // TestLineageMismatchRejected verifies locking fails on a wrong lineage.
 func TestLineageMismatchRejected(t *testing.T) {
-	srv := newTestServer(t)
+	srv, _ := newTestServer(t)
 	req := createReq()
 	req.TaskID = "T-bad"
 	req.LineageID = "WRONG"
@@ -65,7 +65,7 @@ func TestLineageMismatchRejected(t *testing.T) {
 
 // TestStaleMediumSummaryRejected verifies locking fails on a stale summary.
 func TestStaleMediumSummaryRejected(t *testing.T) {
-	srv := newTestServer(t)
+	srv, _ := newTestServer(t)
 	req := createReq()
 	req.TaskID = "T-stale"
 	req.MediumSummary = "OLD"
@@ -79,7 +79,7 @@ func TestStaleMediumSummaryRejected(t *testing.T) {
 // TestCountNotConservedRollback verifies a morphology batch with a conserved
 // total that is wrong rolls back entirely.
 func TestCountNotConservedRollback(t *testing.T) {
-	srv := newTestServer(t)
+	srv, _ := newTestServer(t)
 	id := createAndLock(t, srv)
 	for _, p := range []string{"P1", "P2"} {
 		doJSON(t, srv, "POST", "/api/v1/tasks/"+id+"/subculture-confirmations", "op-sc-"+p,
@@ -104,7 +104,7 @@ func TestCountNotConservedRollback(t *testing.T) {
 // TestTerminalStateRejected verifies writes after a terminal outcome return
 // TERMINAL_STATE and do not change data.
 func TestTerminalStateRejected(t *testing.T) {
-	srv := newTestServer(t)
+	srv, _ := newTestServer(t)
 	id := createAndLock(t, srv)
 	code, env := doJSON(t, srv, "POST", "/api/v1/tasks/"+id+"/finalize", "op-fin",
 		map[string]any{"task_generation": 1, "action": "cancel"})

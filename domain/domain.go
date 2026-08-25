@@ -97,6 +97,7 @@ const (
 	CodeInvalidFixedPoint        ErrorCode = "INVALID_FIXED_POINT"
 	CodeArithmeticOverflow       ErrorCode = "ARITHMETIC_OVERFLOW"
 	CodeDivideByZero             ErrorCode = "DIVIDE_BY_ZERO"
+	CodeRetryNotDue              ErrorCode = "RETRY_NOT_DUE"
 )
 
 // Reason is one structured cause in a rejection response.
