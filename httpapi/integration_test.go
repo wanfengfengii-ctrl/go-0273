@@ -173,6 +173,51 @@ func TestFullAcclimationFlow(t *testing.T) {
 	}
 }
 
+// TestReplayRejectedBeforeLock verifies that a business rejection issued before
+// the lock gate opens is persisted under its operation id: replaying the same
+// operation and body after the gate opens returns the original rejection
+// instead of re-executing the write and double-applying it.
+func TestReplayRejectedBeforeLock(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Create the task but do not lock it yet, so the state is still draft and a
+	// subculture confirmation must be rejected as "not awaiting subculture".
+	create := createReq()
+	code, env := doJSON(t, srv, "POST", "/api/v1/tasks", "op-create", create)
+	if code != http.StatusOK || env.Code != domain.CodeOK {
+		t.Fatalf("create failed: %d %+v", code, env)
+	}
+	confirm := task.ConfirmRequest{PersonnelID: "P1", Generation: 1}
+	code, env = doJSON(t, srv, "POST", "/api/v1/tasks/T1/subculture-confirmations", "op-early", confirm)
+	if env.Code == domain.CodeOK {
+		t.Fatalf("pre-lock confirm should be rejected, got ok: %+v", env)
+	}
+	firstCode := env.Code
+
+	// Now lock the task; the gate opens and the state becomes pending-subculture.
+	code, env = doJSON(t, srv, "POST", "/api/v1/tasks/T1/lock", "op-lock", map[string]any{})
+	if code != http.StatusOK || env.Code != domain.CodeOK {
+		t.Fatalf("lock failed: %d %+v", code, env)
+	}
+
+	// Retry the exact same operation and body: it must replay the original
+	// rejection, not re-execute and record a confirmation.
+	code, env = doJSON(t, srv, "POST", "/api/v1/tasks/T1/subculture-confirmations", "op-early", confirm)
+	if env.Code != firstCode {
+		t.Fatalf("replay should return original rejection %s, got %s: %+v", firstCode, env.Code, env)
+	}
+
+	// No confirmation was recorded for the replayed rejection: the
+	// confirmations count read via View must reflect only real confirmations.
+	v, err := srv.task.View(context.Background(), "T1")
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+	if v.Confirmations != 0 {
+		t.Fatalf("replayed rejection should not record a confirmation, got %d", v.Confirmations)
+	}
+}
+
 // runDeviceSuccess drives one device call to a successful evidence append by
 // retrying through the deterministic fault script.
 func runDeviceSuccess(t *testing.T, srv *Server, id, callID, blindCode, detType, well, value string, scale int) {
