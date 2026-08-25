@@ -141,6 +141,19 @@ func (s *Service) SubmitMeasurements(ctx context.Context, id domain.TaskID, op d
 		if t.State != from {
 			return domain.Envelope{}, domain.NewError(domain.CodeInvalidInput, "not in expected measurement state")
 		}
+		// A measurement batch that advances the task must close the locked
+		// coverage matrix before any state moves: the root step requires every
+		// locked bottle position and root point to carry both root_length and
+		// ttc_viability, with no duplicate, unknown, or extra cells. A partial
+		// batch is rejected whole so the downstream pathogen recheck never
+		// treats a missing reading as already closed.
+		var snap task.Snapshot
+		if advance {
+			snap, err = s.store.Snapshot(ctx, id)
+			if err != nil {
+				return domain.Envelope{}, err
+			}
+		}
 		cells := make([]MeasurementCell, 0, len(req.Readings))
 		for _, in := range req.Readings {
 			fp, err := domain.ParseFixedPoint(in.Value, 24, req.Scale, in.Metric == string(MetricTemperature))
@@ -152,6 +165,12 @@ func (s *Service) SubmitMeasurements(ctx context.Context, id domain.TaskID, op d
 				TaskID: id, Position: in.Position, Point: in.Point, Metric: MetricType(in.Metric),
 				Value: fp, Version: 1,
 			})
+		}
+		if advance {
+			if missing := ValidateRootCoverage(cells, snap.BottlePositions, snap.RootPoints); len(missing) > 0 {
+				return domain.Envelope{}, domain.NewError(domain.CodeEvidenceIncomplete, "root measurements do not cover every locked position and point").
+					WithReasons(missing...)
+			}
 		}
 		if err := s.store.SaveMeasurementBatch(ctx, cells); err != nil {
 			return domain.Envelope{}, err
