@@ -14,6 +14,7 @@ type Store interface {
 	Snapshot(ctx context.Context, id domain.TaskID) (task.Snapshot, error)
 	SamplesByTask(ctx context.Context, id domain.TaskID) ([]BottleSample, error)
 	SealSample(ctx context.Context, b BottleSample) error
+	SealBatch(ctx context.Context, id domain.TaskID, seals []SealInput, from, to domain.TaskState) error
 	BlindCodesByTask(ctx context.Context, id domain.TaskID) ([]BlindCode, error)
 	BindBlindCode(ctx context.Context, c BlindCode) error
 	BlindCode(ctx context.Context, digest string) (BlindCode, error)
@@ -90,16 +91,11 @@ func (s *Service) SealSamples(ctx context.Context, id domain.TaskID, op domain.O
 			seenSeal[in.Seal] = true
 			seenPos[in.Position] = true
 			seenCode[in.BlindCodeDigest] = true
-			if err := s.store.BindBlindCode(ctx, BlindCode{TaskID: id, Digest: in.BlindCodeDigest, BoundSeal: in.Seal}); err != nil {
-				return domain.Envelope{}, err
-			}
 		}
-		for _, in := range req.Seals {
-			if err := s.store.SealSample(ctx, BottleSample{TaskID: id, Seal: in.Seal, Position: in.Position}); err != nil {
-				return domain.Envelope{}, err
-			}
-		}
-		if err := s.store.SetState(ctx, id, domain.StateSealingSamples, domain.StateOccupyingResources); err != nil {
+		// Bind every blind code, seal every sample, and advance the state in a
+		// single transaction so a failure on any one entry rolls back the whole
+		// batch and leaves no partial binding or sealed sample behind.
+		if err := s.store.SealBatch(ctx, id, req.Seals, domain.StateSealingSamples, domain.StateOccupyingResources); err != nil {
 			return domain.Envelope{}, err
 		}
 		return domain.OKEnvelope(map[string]any{"sealed": expected}), nil

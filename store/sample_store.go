@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"strawberry-vitro-acclimation-gate/domain"
@@ -24,6 +25,65 @@ func (db *DB) SealSample(ctx context.Context, b sample.BottleSample) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SealBatch binds every blind code to its seal, marks every triple sample sealed,
+// and advances the task state, all in one transaction. Each seal and blind code
+// is validated against the locked snapshot before any write so a missing seal
+// (e.g. one not in the snapshot) rejects the whole batch and leaves no partial
+// sample or blind-code binding behind.
+func (db *DB) SealBatch(ctx context.Context, id domain.TaskID, seals []sample.SealInput, from, to domain.TaskState) error {
+	return db.Tx(ctx, func(tx *sql.Tx) error {
+		for _, in := range seals {
+			var n int
+			if err := tx.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM bottle_samples WHERE task_id=? AND seal=?`, string(id), in.Seal).Scan(&n); err != nil {
+				return err
+			}
+			if n == 0 {
+				return &domain.BusinessError{Code: domain.CodeInvalidInput, Message: "unknown bottle seal",
+					Reasons: []domain.Reason{{BottleSeal: in.Seal}}}
+			}
+			res, err := tx.ExecContext(ctx,
+				`UPDATE blind_codes SET bound_seal=? WHERE task_id=? AND digest=?`,
+				in.Seal, string(id), in.BlindCodeDigest)
+			if err != nil {
+				return err
+			}
+			rn, _ := res.RowsAffected()
+			if rn == 0 {
+				return &domain.BusinessError{Code: domain.CodeInvalidInput, Message: "unknown blind code",
+					Reasons: []domain.Reason{{Field: "blind_code", Detail: in.BlindCodeDigest}}}
+			}
+		}
+		for _, in := range seals {
+			res, err := tx.ExecContext(ctx,
+				`UPDATE bottle_samples SET triple_sealed=1 WHERE task_id=? AND seal=? AND position=?`,
+				string(id), in.Seal, in.Position)
+			if err != nil {
+				return err
+			}
+			rn, _ := res.RowsAffected()
+			if rn == 0 {
+				return &domain.BusinessError{Code: domain.CodeInvalidInput, Message: "unknown bottle position",
+					Reasons: []domain.Reason{{BottleSeal: in.Seal, BottlePosition: in.Position}}}
+			}
+		}
+		res, err := tx.ExecContext(ctx,
+			`UPDATE tasks SET state=?, state_version=state_version+1, updated_at=updated_at+1 WHERE id=? AND state=?`,
+			int(to), string(id), int(from))
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return fmt.Errorf("seal batch: task not in expected state")
+		}
+		return nil
+	})
 }
 
 // Sample returns a bottle sample row.
