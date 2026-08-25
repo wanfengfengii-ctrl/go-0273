@@ -235,6 +235,18 @@ func (s *Service) AppendRecheckEvidence(ctx context.Context, id domain.TaskID, o
 		if t.Generation != req.Generation {
 			return domain.Envelope{}, domain.NewError(domain.CodeInvalidInput, "stale generation")
 		}
+		// Recheck evidence may only be appended under the single active recheck
+		// round for the current generation. A round must have been created via
+		// the recheck endpoint first; a missing or mismatched round is rejected
+		// at the version barrier rather than silently minting evidence under an
+		// arbitrary round number.
+		active, err := s.store.ActiveRecheck(ctx, t.Generation)
+		if err != nil {
+			return domain.Envelope{}, domain.NewError(domain.CodeInvalidInput, "no active recheck round")
+		}
+		if active.Round != req.Round {
+			return domain.Envelope{}, domain.NewError(domain.CodeInvalidInput, "recheck round does not match active round")
+		}
 		fp, err := domain.ParseFixedPoint(req.Value, 24, req.Scale, req.DetectionType == "endophyte")
 		if err != nil {
 			return domain.Envelope{}, domain.NewError(domain.ErrorCodeOf(err), "invalid fixed point")
