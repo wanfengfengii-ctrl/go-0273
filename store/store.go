@@ -61,7 +61,7 @@ func (db *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
 		return err
 	}
 	if err := fn(tx); err != nil {
-		_ = tx.Commit()
+		_ = tx.Rollback()
 		return err
 	}
 	return tx.Commit()
