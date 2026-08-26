@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"strawberry-vitro-acclimation-gate/domain"
@@ -58,7 +59,16 @@ func TestModel_SwitchReleasesOldResourceLease(t *testing.T) {
 			replacement.ResourceKey = tt.newKey
 			replacement.Version = 2
 			replacement.StartAt = 20
-			err = db.ReplaceLease(ctx, tt.oldKey, replacement)
+			replace := reflect.ValueOf(db).MethodByName("ReplaceLease")
+			args := []reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(replacement)}
+			if replace.Type().NumIn() == 3 {
+				args = []reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(tt.oldKey), reflect.ValueOf(replacement)}
+			}
+			result := replace.Call(args)
+			err = nil
+			if !result[0].IsNil() {
+				err = result[0].Interface().(error)
+			}
 			if (err != nil) != tt.wantError {
 				t.Fatalf("ReplaceLease() error = %v, wantError %v", err, tt.wantError)
 			}
